@@ -69,6 +69,33 @@ input, textarea, select { font-size: 16px !important; }
 [class*="st-key-edit_amount_"] [data-testid="stNumberInputStepUp"],
 [class*="st-key-edit_amount_"] [data-testid="stNumberInputStepDown"] { display: none; }
 
+/* N포인트 입력(등록·수정): 같은 이유로 기본 +/- 대신 −1 / +1 버튼을 쓴다 */
+[class*="st-key-add_point_"] [data-testid="stNumberInputStepUp"],
+[class*="st-key-add_point_"] [data-testid="stNumberInputStepDown"],
+[class*="st-key-edit_point_"] [data-testid="stNumberInputStepUp"],
+[class*="st-key-edit_point_"] [data-testid="stNumberInputStepDown"] { display: none; }
+/* −1/+1 네 버튼 한 줄: 열마다 걸리는 최소 폭(128px) 때문에 375px에서 넘치므로 해제 */
+[class*="st-key-point_btns_"] [data-testid="stColumn"] { min-width: 0; }
+
+/* 카테고리 선택(등록·수정): 4개를 한 줄에 같은 폭으로 배치. 375px에서도 들어가도록 글자·여백을 줄인다 */
+[class*="st-key-add_category"] [data-testid="stButtonGroup"] > div:last-child,
+[class*="st-key-edit_category_"] [data-testid="stButtonGroup"] > div:last-child {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.25rem;
+}
+[class*="st-key-add_category"] [data-testid="stButtonGroup"] button,
+[class*="st-key-edit_category_"] [data-testid="stButtonGroup"] button {
+  width: 100%; min-width: 0; min-height: 44px; margin: 0; border-radius: 0.5rem; padding: 0.25rem 0.1rem;
+}
+[class*="st-key-add_category"] [data-testid="stButtonGroup"] button *,
+[class*="st-key-edit_category_"] [data-testid="stButtonGroup"] button * {
+  font-size: clamp(0.72rem, 3.3vw, 1rem); word-break: keep-all; white-space: normal; line-height: 1.2;
+}
+/* 붙어 있을 때 겹치던 쪽 테두리가 투명하게 빠지므로, 선택 안 된 버튼은 네 변 모두 같은 색으로 */
+[class*="st-key-add_category"] [data-testid="stButtonGroup"] button[aria-checked="false"],
+[class*="st-key-edit_category_"] [data-testid="stButtonGroup"] button[aria-checked="false"] {
+  border-color: rgba(49, 51, 63, 0.2) !important;
+}
+
 /* 앱 제목 / 탭 안 섹션 제목 */
 .app-title { font-size: 1.5rem; font-weight: 700; line-height: 1.3; margin: 0; }
 .section-title { font-size: 1.2rem; font-weight: 700; margin: 0.25rem 0 0; }
@@ -103,6 +130,14 @@ input, textarea, select { font-size: 16px !important; }
   border-top: 2px solid rgba(128, 128, 128, 0.5);
 }
 .stat-total span:last-child { white-space: nowrap; }
+
+/* 네이버포인트 전체 누적 요약 (통계 탭 하단 고정) */
+.point-box {
+  margin-top: 1.25rem; padding: 0.5rem 0.9rem 0.6rem;
+  border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 0.75rem;
+}
+.point-title { font-size: 1.05rem; font-weight: 700; padding: 0.25rem 0; }
+.point-note { font-size: 0.8rem; opacity: 0.6; margin-top: 0.25rem; }
 
 /* 보고 텍스트 복사 버튼 */
 .report-copy-btn {
@@ -164,6 +199,8 @@ def handle_add_expense():
         ss.get("add_category"),
         ss.get(add_key("place")),
         ss.get(add_key("memo")),
+        ss.get(add_key("point_earned")),
+        ss.get(add_key("point_used")),
     )
     if errors:
         ss["add_errors"] = errors
@@ -190,6 +227,15 @@ def step_amount(key, delta):
             ss[key] = current + delta
         else:
             set_flash(f"{AMOUNT_STEP:,}원 이하에서는 더 줄일 수 없습니다.")
+
+
+def step_point(key, delta):
+    """N포인트 −1 / +1 버튼 (등록·수정 폼). 빈 칸에서 +1은 1부터, 0 아래로는 내려가지 않는다."""
+    ss = st.session_state
+    current = ss.get(key)
+    if current is None and delta < 0:
+        return
+    ss[key] = min(max((current or 0) + delta, 0), utils.MAX_AMOUNT)
 
 
 def increase_add_amount():
@@ -220,6 +266,8 @@ def save_edit(expense_id):
         ss.get(f"edit_category_{expense_id}"),
         ss.get(f"edit_place_{expense_id}"),
         ss.get(f"edit_memo_{expense_id}"),
+        ss.get(f"edit_point_earned_{expense_id}"),
+        ss.get(f"edit_point_used_{expense_id}"),
     )
     if errors:
         ss["edit_errors"] = errors
@@ -310,6 +358,36 @@ def render_summary():
     )
 
 
+def render_point_inputs(earned_key, used_key):
+    """네이버포인트 적립·사용(차감) 입력칸 + 각각 −1 / +1 버튼 (선택 입력, 비우면 0). 등록·수정 폼 공통.
+
+    처음에는 빈 칸이다. 수정 폼은 기존 값을 session_state로 미리 채운다.
+    기본 +/- 는 빈 칸에서 비활성화되므로 숨기고, 폼 제출 버튼으로 만든 −1 / +1을 쓴다.
+    """
+    fields = (("N포인트 적립", earned_key), ("N포인트 사용", used_key))
+    for col, (label, key) in zip(st.columns(2, wrap=False), fields):
+        with col:
+            st.number_input(
+                label,
+                min_value=0,
+                max_value=utils.MAX_AMOUNT,
+                value=None,
+                step=1,
+                format="%d",
+                key=key,
+                placeholder="숫자 입력",
+            )
+    # 칸 안에 버튼 열을 한 번 더 나누면 375px에서 +1이 잘리므로, 네 버튼을 한 줄로 두고 각 입력칸 아래에 맞춘다.
+    buttons = [(key, text, suffix, delta) for key in (earned_key, used_key)
+               for text, suffix, delta in (("− 1", "minus", -1), ("+ 1", "plus", 1))]
+    with st.container(key=f"point_btns_{earned_key}"):
+        for col, (key, text, suffix, delta) in zip(st.columns(4, wrap=False), buttons):
+            with col:
+                st.form_submit_button(
+                    text, key=f"{key}_{suffix}", width="stretch", on_click=step_point, args=(key, delta)
+                )
+
+
 # ---------------------------------------------------------------------------
 # [지출 입력] 탭
 # ---------------------------------------------------------------------------
@@ -362,6 +440,7 @@ def render_add_tab():
             key=add_key("memo"),
             placeholder="(선택 입력)",
         )
+        render_point_inputs(add_key("point_earned"), add_key("point_used"))
         st.form_submit_button(
             "지출 등록",
             type="primary",
@@ -443,6 +522,8 @@ def render_expense_table(rows):
                 "금액": row["amount"],
                 "사용처": row["place"],
                 "메모": row["memo"],
+                "N포인트 적립": row["point_earned"],
+                "N포인트 사용": row["point_used"],
             }
             for row in rows
         ]
@@ -450,7 +531,11 @@ def render_expense_table(rows):
     st.dataframe(
         df,
         hide_index=True,
-        column_config={"금액": st.column_config.NumberColumn("금액(원)", format="localized")},
+        column_config={
+            "금액": st.column_config.NumberColumn("금액(원)", format="localized"),
+            "N포인트 적립": st.column_config.NumberColumn("N포인트 적립", format="localized"),
+            "N포인트 사용": st.column_config.NumberColumn("N포인트 사용", format="localized"),
+        },
     )
     st.caption("수정·삭제는 '표로 보기'를 끄고 카드 목록에서 할 수 있습니다. 좁은 화면에서는 표를 옆으로 밀어서 보세요.")
 
@@ -464,6 +549,9 @@ def expense_card_html(row) -> str:
         parts.append(f'<div class="exp-place">{h(row["place"])}</div>')
     if row["memo"]:
         parts.append(f'<div class="exp-memo">{h(row["memo"])}</div>')
+    points = utils.point_line(row)
+    if points:
+        parts.append(f'<div class="exp-memo">{h(points)}</div>')
     return "".join(parts)
 
 
@@ -526,6 +614,12 @@ def render_edit_form(row):
     # key가 없을 때만 채우므로, 사용자가 지운 값(None)이나 ±로 바꾼 값은 유지된다.
     if amount_key not in st.session_state:
         st.session_state[amount_key] = row["amount"]
+    # 포인트 칸도 같은 방식으로 채운다. value로 넣으면 칸을 비울 수 없어 포인트를 지울 수 없다.
+    # 0이면 빈 칸으로 보여준다. (저장 시 빈 칸은 0)
+    for field in ("point_earned", "point_used"):
+        point_key = f"edit_{field}_{expense_id}"
+        if point_key not in st.session_state:
+            st.session_state[point_key] = row[field] or None
 
     # Enter 키 제출은 끈다. (켜 두면 첫 번째 제출 버튼인 −1,000이 눌릴 수 있음)
     with st.form(f"edit_form_{expense_id}", border=False, enter_to_submit=False):
@@ -583,6 +677,7 @@ def render_edit_form(row):
             key=f"edit_memo_{expense_id}",
             placeholder="(선택 입력)",
         )
+        render_point_inputs(f"edit_point_earned_{expense_id}", f"edit_point_used_{expense_id}")
         col_save, col_cancel = st.columns(2, wrap=False)
         with col_save:
             st.form_submit_button(
@@ -607,8 +702,13 @@ def render_stats_tab():
     _, start, end, error = render_period_picker("stats", utils.STATS_PERIODS, utils.PERIOD_THIS_MONTH)
     if error:
         st.error(error)
-        return
+    else:
+        render_period_totals(start, end)
+    # 네이버포인트는 기간 선택과 무관하게 항상 전체 누적으로 보여준다. (기간 오류일 때도 표시)
+    render_point_summary()
 
+
+def render_period_totals(start, end):
     start_iso, end_iso = utils.iso_or_none(start), utils.iso_or_none(end)
     category_totals = utils.order_category_totals(db.get_category_totals(start_iso, end_iso))
     total, count = db.get_total(start_iso, end_iso)
@@ -625,6 +725,26 @@ def render_stats_tab():
     )
 
 
+def render_point_summary():
+    """네이버포인트 전체 누적 요약 (매번 DB 원본에서 계산, 기간 무관).
+
+    지출 합계와는 별도다. (금액은 결제 총액이라 포인트 사용분도 포함되어 있음)
+    """
+    point_earned, point_used = db.get_point_totals()
+    balance = point_earned - point_used
+    st.html(
+        '<div class="point-box">'
+        '<div class="point-title">🟢 네이버포인트 (전체 누적)</div>'
+        f'<div class="stat-row"><span>총 적립 포인트</span>'
+        f'<span class="stat-amount">{h(utils.format_point(point_earned))}</span></div>'
+        f'<div class="stat-row"><span>총 차감(사용) 포인트</span>'
+        f'<span class="stat-amount">{h(utils.format_point(point_used))}</span></div>'
+        f'<div class="stat-total"><span>포인트 잔액</span><span>{h(utils.format_point(balance))}</span></div>'
+        '<div class="point-note">기간 선택과 관계없이 전체 내역 기준입니다.</div>'
+        "</div>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # [보고·백업] 탭
 # ---------------------------------------------------------------------------
@@ -634,6 +754,19 @@ def build_report(period_label, start, end):
     start_iso, end_iso = utils.to_iso(start), utils.to_iso(end)
     rows = db.get_expenses(start_iso, end_iso, order="asc")
     total, _ = db.get_total(start_iso, end_iso)
+    if utils.is_weekly_report(period_label):
+        week_ranges = utils.month_week_ranges(start)
+        month_week_totals = [
+            (n, db.get_total(utils.to_iso(s), utils.to_iso(e))[0]) for n, s, e in week_ranges
+        ]
+        month_total, _ = db.get_total(utils.to_iso(week_ranges[0][1]), end_iso)
+        point_earned, point_used = db.get_point_totals(start_iso, end_iso)
+        earned_to_date, used_to_date = db.get_point_totals(end=end_iso)
+        return utils.build_weekly_report_text(
+            start, end, rows, db.get_category_totals(start_iso, end_iso), total,
+            month_week_totals, month_total,
+            point_earned, point_used, earned_to_date - used_to_date,
+        )
     return utils.build_report_text(
         period_label, start, end, rows, db.get_category_totals(start_iso, end_iso), total
     )
@@ -643,7 +776,10 @@ def build_backup_bytes(backup_at):
     """전체 DB로 TXT 백업 내용을 만든다. 백업 일시는 파일명과 같은 backup_at을 쓴다."""
     rows = db.get_expenses(order="desc")
     total, count = db.get_total()
-    text = utils.build_backup_text(rows, db.get_category_totals(), total, count, backup_at)
+    point_earned, point_used = db.get_point_totals()
+    text = utils.build_backup_text(
+        rows, db.get_category_totals(), total, count, backup_at, point_earned, point_used
+    )
     return text.encode("utf-8-sig")
 
 

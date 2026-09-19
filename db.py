@@ -3,9 +3,13 @@
 합계는 절대 저장하지 않고, 필요할 때마다 원본 데이터에서 SUM으로 계산한다.
 """
 
+import shutil
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from seed_data import RESTORE_ROWS
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "expenses.db"
 
@@ -17,9 +21,25 @@ CREATE TABLE IF NOT EXISTS expenses (
     category     TEXT    NOT NULL,
     place        TEXT    NOT NULL DEFAULT '',
     memo         TEXT    NOT NULL DEFAULT '',
-    created_at   TEXT    NOT NULL
+    created_at   TEXT    NOT NULL,
+    point_earned INTEGER NOT NULL DEFAULT 0 CHECK (point_earned >= 0),
+    point_used   INTEGER NOT NULL DEFAULT 0 CHECK (point_used >= 0)
 )
 """
+
+# 예전 DB에 없던 컬럼: 기존 행은 기본값 0으로 채워지고 다른 값은 그대로 남는다.
+_ADDED_COLUMNS = {
+    "point_earned": "INTEGER NOT NULL DEFAULT 0 CHECK (point_earned >= 0)",  # 네이버포인트 적립
+    "point_used": "INTEGER NOT NULL DEFAULT 0 CHECK (point_used >= 0)",      # 네이버포인트 사용(차감)
+}
+
+# 이름이 바뀐 카테고리 {예전 이름: 새 이름}. 카테고리 값만 바꾸고 금액·날짜·메모 등은 건드리지 않는다.
+_CATEGORY_RENAMES = {
+    "주방 식재료": "평일식재료",
+}
+
+# PRAGMA user_version: 이 값보다 작으면 백업 17건 복원(seed_data.RESTORE_ROWS)이 아직 안 된 DB다.
+_RESTORE_VERSION = 1
 
 _CREATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_expenses_expense_date ON expenses (expense_date)
@@ -66,24 +86,97 @@ def _build_where(start=None, end=None, category=None):
 # 초기화
 # ---------------------------------------------------------------------------
 
+def _needs_migration():
+    """기존 DB 파일에 컬럼 추가나 카테고리 이름 변경이 필요한지 확인한다. (읽기만 함)"""
+    if not DB_PATH.exists():
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(expenses)")}
+        if not columns:  # 테이블이 아직 없음 (빈 파일)
+            return False
+        if any(name not in columns for name in _ADDED_COLUMNS):
+            return True
+        placeholders = ", ".join("?" for _ in _CATEGORY_RENAMES)
+        row = conn.execute(
+            f"SELECT COUNT(*) FROM expenses WHERE category IN ({placeholders})",
+            list(_CATEGORY_RENAMES),
+        ).fetchone()
+        return row[0] > 0
+    finally:
+        conn.close()
+
+
+def _needs_restore():
+    """백업 복원을 아직 하지 않은 기존 DB 파일인지 확인한다. (읽기만 함)"""
+    if not DB_PATH.exists():
+        return False
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0] < _RESTORE_VERSION
+    finally:
+        conn.close()
+
+
+def _backup_db_file(prefix="expenses_before_migration"):
+    """마이그레이션·복원 전에 DB 파일을 같은 폴더에 복사해 둔다."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    shutil.copy2(DB_PATH, DB_PATH.with_name(f"{prefix}_{stamp}.db"))
+
+
+def _restore_seed_rows(conn):
+    """백업 17건을 DB마다 한 번만 넣는다. 같은 날짜·금액·사용처 행이 이미 있으면 그 건은 건너뛴다.
+
+    한 번 복원한 뒤에는 user_version을 올려 두므로, 사용자가 나중에 지운 건이 다시 생기지 않는다.
+    """
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= _RESTORE_VERSION:
+        return
+    created_at = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
+    for expense_date, amount, category, place, memo in RESTORE_ROWS:
+        exists = conn.execute(
+            "SELECT 1 FROM expenses WHERE expense_date = ? AND amount = ? AND place = ?",
+            (expense_date, amount, place),
+        ).fetchone()
+        if not exists:
+            conn.execute(
+                "INSERT INTO expenses (expense_date, amount, category, place, memo, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (expense_date, amount, category, place, memo, created_at),
+            )
+    conn.execute(f"PRAGMA user_version = {_RESTORE_VERSION}")
+
+
 def init_db():
+    """테이블을 만들고, 예전 DB는 데이터를 지우지 않고 새 구조로 맞춘다. 여러 번 실행해도 안전하다."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _needs_migration():
+        _backup_db_file()
+    if _needs_restore():
+        _backup_db_file("expenses_before_restore")
     with _connect() as conn:
         conn.execute(_CREATE_TABLE_SQL)
         conn.execute(_CREATE_INDEX_SQL)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(expenses)")}
+        for name, definition in _ADDED_COLUMNS.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE expenses ADD COLUMN {name} {definition}")
+        for old, new in _CATEGORY_RENAMES.items():
+            conn.execute("UPDATE expenses SET category = ? WHERE category = ?", (new, old))
+        _restore_seed_rows(conn)
 
 
 # ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
 
-def add_expense(expense_date, amount, category, place, memo, created_at):
+def add_expense(expense_date, amount, category, place, memo, created_at, point_earned=0, point_used=0):
     """지출을 추가하고 새 id를 반환한다."""
     with _connect() as conn:
         cur = conn.execute(
-            "INSERT INTO expenses (expense_date, amount, category, place, memo, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (expense_date, int(amount), category, place, memo, created_at),
+            "INSERT INTO expenses "
+            "(expense_date, amount, category, place, memo, created_at, point_earned, point_used) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (expense_date, int(amount), category, place, memo, created_at, int(point_earned), int(point_used)),
         )
         return cur.lastrowid
 
@@ -102,13 +195,13 @@ def get_expense(expense_id):
         return dict(row) if row else None
 
 
-def update_expense(expense_id, expense_date, amount, category, place, memo):
+def update_expense(expense_id, expense_date, amount, category, place, memo, point_earned=0, point_used=0):
     """수정 성공 여부를 반환한다. created_at은 변경하지 않는다."""
     with _connect() as conn:
         cur = conn.execute(
-            "UPDATE expenses SET expense_date = ?, amount = ?, category = ?, place = ?, memo = ? "
-            "WHERE id = ?",
-            (expense_date, int(amount), category, place, memo, expense_id),
+            "UPDATE expenses SET expense_date = ?, amount = ?, category = ?, place = ?, memo = ?, "
+            "point_earned = ?, point_used = ? WHERE id = ?",
+            (expense_date, int(amount), category, place, memo, int(point_earned), int(point_used), expense_id),
         )
         return cur.rowcount > 0
 
@@ -142,3 +235,15 @@ def get_category_totals(start=None, end=None):
     )
     with _connect() as conn:
         return {row["category"]: int(row["total"]) for row in conn.execute(sql, params)}
+
+
+def get_point_totals(start=None, end=None):
+    """기간 내 네이버포인트 (적립 합계, 사용 합계)를 반환한다. 데이터가 없으면 (0, 0)."""
+    where, params = _build_where(start, end)
+    sql = (
+        "SELECT COALESCE(SUM(point_earned), 0) AS earned, COALESCE(SUM(point_used), 0) AS used "
+        f"FROM expenses{where}"
+    )
+    with _connect() as conn:
+        row = conn.execute(sql, params).fetchone()
+        return int(row["earned"]), int(row["used"])
