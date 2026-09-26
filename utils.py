@@ -59,8 +59,8 @@ def from_iso(s: str) -> date:
 # ---------------------------------------------------------------------------
 
 def week_range(base: date) -> tuple[date, date]:
-    """base가 속한 주의 월요일 ~ 일요일."""
-    start = base - timedelta(days=base.weekday())  # 월=0 ... 일=6
+    """base가 속한 주의 일요일 ~ 토요일."""
+    start = base - timedelta(days=(base.weekday() + 1) % 7)  # 월=0 ... 일=6 → 일요일까지 되돌아간다
     return start, start + timedelta(days=6)
 
 
@@ -81,12 +81,12 @@ def last_month_range(base: date) -> tuple[date, date]:
 
 
 def week_of_month(week_start: date) -> tuple[int, int, int]:
-    """주(월~일)가 몇 월 몇째주인지 (연, 월, 주차)를 반환한다.
+    """주(일~토)가 몇 월 몇째주인지 (연, 월, 주차)를 반환한다.
 
-    주는 일요일이 속한 달의 주로 보고, 그 달 1일이 들어 있는 주가 1주차다. (예: 8/31~9/6 → 9월 1주차)
+    주는 토요일이 속한 달의 주로 보고, 그 달 1일이 들어 있는 주가 1주차다. (예: 8/30~9/5 → 9월 1주차)
     """
-    sunday = week_start + timedelta(days=6)
-    return sunday.year, sunday.month, (sunday.day - 1) // 7 + 1
+    saturday = week_start + timedelta(days=6)
+    return saturday.year, saturday.month, (saturday.day - 1) // 7 + 1
 
 
 def month_week_ranges(week_start: date) -> list[tuple[int, date, date]]:
