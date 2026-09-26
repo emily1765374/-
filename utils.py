@@ -20,6 +20,8 @@ except Exception:  # tzdata가 없는 Windows 환경 대비 (한국은 서머타
 CATEGORIES = ["평일식재료", "안식일식재료", "주방 소모품", "기타"]
 
 MAX_AMOUNT = 100_000_000
+# 금액·포인트가 모두 비어 있을 때의 안내. (금액은 선택 입력이지만 셋 다 비면 등록할 것이 없다)
+EMPTY_INPUT_ERROR = "금액 또는 N포인트 적립·사용 중 하나는 입력해 주세요."
 PLACE_MAX_LEN = 50
 MEMO_MAX_LEN = 200
 
@@ -136,7 +138,8 @@ def _normalize_amount(amount):
 def validate_expense(expense_date, amount, category, place, memo, point_earned=None, point_used=None):
     """지출 입력값을 검증하고 정리한다.
 
-    네이버포인트(적립·사용)는 선택 입력이며, 비어 있으면 0으로 저장한다.
+    금액과 네이버포인트(적립·사용)는 모두 선택 입력이지만, 셋 다 비어 있으면 등록하지 않는다.
+    포인트만 적립·사용한 건은 금액 0원으로 저장한다. (비어 있는 포인트는 0)
 
     반환: (정리된 값 dict 또는 None, 오류 메시지 list)
     오류가 하나라도 있으면 첫 번째 값은 None이다.
@@ -146,15 +149,40 @@ def validate_expense(expense_date, amount, category, place, memo, point_earned=N
     if not isinstance(expense_date, date):
         errors.append("날짜를 선택해 주세요.")
 
+    # 금액 검증이 포인트 입력 여부에 따라 달라지므로 포인트를 먼저 읽는다.
+    # (오류 문구 순서는 화면 입력 순서를 따르도록 마지막에 붙인다)
+    point_values, point_errors = {}, []
+    for field, label, value in (
+        ("point_earned", "네이버포인트 적립", point_earned),
+        ("point_used", "네이버포인트 사용", point_used),
+    ):
+        if value is None:
+            point_values[field] = 0
+            continue
+        point_int = _normalize_amount(value)
+        if point_int is None:
+            point_errors.append(f"{label}는 정수로 입력해 주세요.")
+        elif point_int < 0:
+            point_errors.append(f"{label}는 0 이상으로 입력해 주세요.")
+        elif point_int > MAX_AMOUNT:
+            point_errors.append(f"{label}는 {MAX_AMOUNT:,} 이하로 입력해 주세요.")
+        else:
+            point_values[field] = point_int
+    has_point = any(point_values.get(field) for field in ("point_earned", "point_used"))
+
     if amount is None:
-        errors.append("금액을 입력해 주세요.")
-        amount_int = None
+        # 포인트만 적립·사용한 건은 금액을 비워 둘 수 있다. 이때 금액은 0원으로 저장한다.
+        amount_int = 0 if has_point else None
+        if amount_int is None:
+            errors.append(EMPTY_INPUT_ERROR)
     else:
         amount_int = _normalize_amount(amount)
         if amount_int is None:
             errors.append("금액은 원 단위 정수로 입력해 주세요.")
-        elif amount_int < 1:
-            errors.append("금액을 1원 이상 입력해 주세요.")
+        elif amount_int < 0:
+            errors.append("금액은 0원 이상으로 입력해 주세요.")
+        elif amount_int == 0 and not has_point:
+            errors.append(EMPTY_INPUT_ERROR)
         elif amount_int > MAX_AMOUNT:
             errors.append(f"금액은 {MAX_AMOUNT:,}원 이하로 입력해 주세요.")
 
@@ -168,28 +196,9 @@ def validate_expense(expense_date, amount, category, place, memo, point_earned=N
     if len(memo) > MEMO_MAX_LEN:
         errors.append(f"메모는 {MEMO_MAX_LEN}자 이내로 입력해 주세요.")
 
-    point_values = {}
-    for field, label, value in (
-        ("point_earned", "네이버포인트 적립", point_earned),
-        ("point_used", "네이버포인트 사용", point_used),
-    ):
-        if value is None:
-            point_values[field] = 0
-            continue
-        point_int = _normalize_amount(value)
-        if point_int is None:
-            errors.append(f"{label}는 정수로 입력해 주세요.")
-        elif point_int < 0:
-            errors.append(f"{label}는 0 이상으로 입력해 주세요.")
-        elif point_int > MAX_AMOUNT:
-            errors.append(f"{label}는 {MAX_AMOUNT:,} 이하로 입력해 주세요.")
-        else:
-            point_values[field] = point_int
-    if (
-        amount_int is not None
-        and "point_used" in point_values
-        and point_values["point_used"] > amount_int
-    ):
+    errors.extend(point_errors)
+    # 금액이 0원(포인트만 등록)이면 결제 금액이 없으므로 "사용 <= 금액" 규칙은 적용하지 않는다.
+    if amount_int and point_values.get("point_used", 0) > amount_int:
         errors.append("네이버포인트 사용은 금액보다 클 수 없습니다.")
 
     if errors:
@@ -289,6 +298,15 @@ WEEKDAY_NAMES = "월화수목금토일"
 REPORT_CATEGORY_LABELS = {"주방 소모품": "주방소모품"}
 
 
+def spending_rows(rows):
+    """보고 텍스트의 내역 목록용 필터.
+
+    금액 0원 건(카드 결제 없이 네이버포인트만 적립·사용한 건)은 실제 지출이 아니므로 목록에서 뺀다.
+    포인트 합계와 TXT 백업은 이 필터를 쓰지 않고 모든 건을 그대로 다룬다.
+    """
+    return [row for row in rows if int(row["amount"]) > 0]
+
+
 def is_weekly_report(period_label) -> bool:
     return period_label in (PERIOD_THIS_WEEK, PERIOD_LAST_WEEK)
 
@@ -305,7 +323,9 @@ def build_weekly_report_text(
     """주간 보고 텍스트 (PRD 13장). rows_asc는 날짜 오래된 순으로 정렬된 그 주의 지출 목록.
 
     month_week_totals는 그 달 1주차 ~ 보고 주까지 [(주차, 합계)], point_*는 이번 주 적립·사용과 누적 잔액이다.
+    ① 일별 지출현황에는 0원 건(포인트만 등록한 건)을 쓰지 않는다. ④ 포인트 합계에는 그대로 반영된다.
     """
+    rows_asc = spending_rows(rows_asc)
     _, month, week_no = week_of_month(start)
     lines = [
         WEEKLY_REPORT_TITLE,
@@ -354,7 +374,11 @@ def build_weekly_report_text(
 
 
 def build_report_text(period_label, start: date, end: date, rows_asc, category_totals: dict, total: int) -> str:
-    """월간·직접 선택 보고 텍스트 (PRD 13장). rows_asc는 날짜 오래된 순으로 정렬된 지출 목록."""
+    """월간·직접 선택 보고 텍스트 (PRD 13장). rows_asc는 날짜 오래된 순으로 정렬된 지출 목록.
+
+    상세 내역에는 주간 보고와 마찬가지로 0원 건(포인트만 등록한 건)을 쓰지 않는다.
+    """
+    rows_asc = spending_rows(rows_asc)
     lines = [
         report_title(period_label),
         "",

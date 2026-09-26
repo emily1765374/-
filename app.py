@@ -210,23 +210,35 @@ def handle_add_expense():
 
     ss["add_errors"] = []
     ss["add_version"] = ss.get("add_version", 0) + 1
-    set_flash(f"✅ {utils.format_won(cleaned['amount'])} 등록 완료")
+    set_flash(f"✅ {saved_label(cleaned)} 등록 완료")
+
+
+def saved_label(cleaned):
+    """등록·수정 알림에 쓸 문구. 금액이 0원(포인트만 등록한 건)이면 포인트를 대신 보여준다."""
+    if cleaned["amount"]:
+        return utils.format_won(cleaned["amount"])
+    parts = []
+    if cleaned["point_earned"]:
+        parts.append(f"적립 {utils.format_point(cleaned['point_earned'])}")
+    if cleaned["point_used"]:
+        parts.append(f"사용 {utils.format_point(cleaned['point_used'])}")
+    return "N포인트 " + " / ".join(parts)
 
 
 def step_amount(key, delta):
     """±1,000 버튼 공통 처리 (등록·수정 폼).
 
-    비어 있을 때 +는 1,000부터 시작한다. 1원 미만이 되는 경우에는 바꾸지 않고 안내한다.
+    비어 있을 때 +는 1,000부터 시작한다. 0원 미만이 되는 경우에는 바꾸지 않고 안내한다.
     """
     ss = st.session_state
     current = ss.get(key)
     if delta > 0:
         ss[key] = min((current or 0) + delta, utils.MAX_AMOUNT)
     elif current is not None:
-        if current + delta >= 1:
+        if current + delta >= 0:
             ss[key] = current + delta
         else:
-            set_flash(f"{AMOUNT_STEP:,}원 이하에서는 더 줄일 수 없습니다.")
+            set_flash("0원 미만으로는 줄일 수 없습니다.")
 
 
 def step_point(key, delta):
@@ -274,7 +286,7 @@ def save_edit(expense_id):
         return
 
     if db.update_expense(expense_id, **cleaned):
-        set_flash(f"✏️ {utils.format_won(cleaned['amount'])} 수정 완료")
+        set_flash(f"✏️ {saved_label(cleaned)} 수정 완료")
     else:
         set_flash("이미 삭제된 내역입니다.")
     ss["editing_id"] = None
@@ -404,7 +416,7 @@ def render_add_tab():
         st.date_input("날짜", value=today, key=date_key, format="YYYY-MM-DD")
         st.number_input(
             "금액 (원)",
-            min_value=1,
+            min_value=0,
             max_value=utils.MAX_AMOUNT,
             value=None,
             step=AMOUNT_STEP,
@@ -631,7 +643,7 @@ def render_edit_form(row):
         )
         st.number_input(
             "금액 (원)",
-            min_value=1,
+            min_value=0,
             max_value=utils.MAX_AMOUNT,
             value=None,
             step=AMOUNT_STEP,
