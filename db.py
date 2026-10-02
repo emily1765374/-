@@ -38,8 +38,9 @@ _CATEGORY_RENAMES = {
     "주방 식재료": "평일식재료",
 }
 
-# PRAGMA user_version: 이 값보다 작으면 백업 17건 복원(seed_data.RESTORE_ROWS)이 아직 안 된 DB다.
-_RESTORE_VERSION = 1
+# PRAGMA user_version: 이 값보다 작으면 백업 복원(seed_data.RESTORE_ROWS)이 아직 안 된 DB다.
+# 1 = 2026-09-19 백업 17건, 2 = 2026-10-02 백업 23건. 복원 목록을 바꾸면 1 올린다.
+_RESTORE_VERSION = 2
 
 _CREATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_expenses_expense_date ON expenses (expense_date)
@@ -169,23 +170,24 @@ def _backup_db_file(prefix="expenses_before_migration"):
 
 
 def _restore_seed_rows(conn):
-    """백업 17건을 DB마다 한 번만 넣는다. 같은 날짜·금액·사용처 행이 이미 있으면 그 건은 건너뛴다.
+    """백업 행(seed_data.RESTORE_ROWS)을 DB마다 한 번만 넣는다. 같은 날짜·금액·사용처 행이 이미 있으면 그 건은 건너뛴다.
 
     한 번 복원한 뒤에는 user_version을 올려 두므로, 사용자가 나중에 지운 건이 다시 생기지 않는다.
     """
     if conn.execute("PRAGMA user_version").fetchone()[0] >= _RESTORE_VERSION:
         return
     created_at = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M:%S")
-    for expense_date, amount, category, place, memo in RESTORE_ROWS:
+    for expense_date, amount, category, place, memo, point_earned, point_used in RESTORE_ROWS:
         exists = conn.execute(
             "SELECT 1 FROM expenses WHERE expense_date = ? AND amount = ? AND place = ?",
             (expense_date, amount, place),
         ).fetchone()
         if not exists:
             conn.execute(
-                "INSERT INTO expenses (expense_date, amount, category, place, memo, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (expense_date, amount, category, place, memo, created_at),
+                "INSERT INTO expenses "
+                "(expense_date, amount, category, place, memo, created_at, point_earned, point_used) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (expense_date, amount, category, place, memo, created_at, point_earned, point_used),
             )
     conn.execute(f"PRAGMA user_version = {_RESTORE_VERSION}")
 

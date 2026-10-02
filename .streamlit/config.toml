@@ -1,0 +1,11 @@
+[client]
+# 우측 상단 메뉴·Deploy 버튼 최소화
+toolbarMode = "minimal"
+
+[theme]
+# 포인트 색 1개 (주요 버튼, 선택된 기간/카테고리).
+# 테마 옵션을 지정하면 라이트 테마로 고정된다. 이 앱은 라이트 테마만 사용한다 (다크 모드 미지원 결정).
+primaryColor = "#15803d"
+
+[browser]
+gatherUsageStats = false
