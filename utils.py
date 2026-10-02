@@ -381,7 +381,7 @@ def build_weekly_report_text(
         "④ 네이버포인트",
         f"이번주 적립 : {format_won(point_earned)}",
         f"이번주 사용 : {format_won(point_used)}",
-        f"사용가능포인트 : {format_won(point_balance)}",
+        f"▶ 사용가능포인트 : {format_won(point_balance)}",
     ]
     return "\n".join(lines)
 
@@ -394,11 +394,11 @@ def build_report_text(
 
     포인트 적립·사용은 기간 합계, point_balance는 기간 마지막 날까지의 전체 적립 − 사용(음수 가능)이다.
     """
-    lines = [MONTHLY_REPORT_TITLE, "", f"기간: {to_iso(start)} ~ {to_iso(end)}"]
+    lines = [MONTHLY_REPORT_TITLE, "", f"기간 : {to_iso(start)} ~ {to_iso(end)}"]
     for category, amount in order_category_totals(category_totals):
-        lines.append(f"{category}: {format_won(amount)}")
+        lines.append(f"{category} : {format_won(amount)}")
     lines += [
-        f"▶ 총 지출: {format_won(total)}",
+        f"▶ 총 지출 : {format_won(total)}",
         "",
         "네이버포인트",
         f"이번달 적립 : {format_won(point_earned)}",
@@ -413,12 +413,12 @@ _BACKUP_RULE = "=" * 40
 _BACKUP_SEPARATOR = "-" * 40
 
 
-def point_line(row, fmt=format_point) -> str | None:
-    """카드·백업용 네이버포인트 한 줄. 적립·사용이 모두 0이면 None. 카드는 P, 백업은 원(fmt=format_won)."""
+def point_line(row, fmt=format_point, sep=": ") -> str | None:
+    """카드·백업용 네이버포인트 한 줄. 적립·사용이 모두 0이면 None. 카드는 P·': ', 백업은 원·' : '."""
     earned, used = int(row.get("point_earned") or 0), int(row.get("point_used") or 0)
     if not earned and not used:
         return None
-    return f"네이버포인트: 적립 {fmt(earned)} / 사용 {fmt(used)}"
+    return f"네이버포인트{sep}적립 {fmt(earned)} / 사용 {fmt(used)}"
 
 
 def build_backup_text(
@@ -431,9 +431,9 @@ def build_backup_text(
         BACKUP_TITLE,
         _BACKUP_RULE,
         "",
-        f"백업 일시: {backup_at.strftime(DATETIME_FORMAT)}",
-        f"전체 지출 건수: {count:,}건",
-        f"전체 지출 합계: {format_won(total)}",
+        f"백업 일시 : {backup_at.strftime(DATETIME_FORMAT)}",
+        f"전체 지출 건수 : {count:,}건",
+        f"전체 지출 합계 : {format_won(total)}",
         "",
         "[지출 내역]",
         "",
@@ -443,27 +443,27 @@ def build_backup_text(
     for row in rows_desc:
         lines += [
             row["expense_date"],
-            f"카테고리: {report_category(row['category'])}",
-            f"금액: {format_won(row['amount'])}",
-            f"사용처: {dash_if_empty(row['place'])}",
-            f"메모: {dash_if_empty(row['memo'])}",
+            f"카테고리 : {report_category(row['category'])}",
+            f"금액 : {format_won(row['amount'])}",
+            f"사용처 : {dash_if_empty(row['place'])}",
+            f"메모 : {dash_if_empty(row['memo'])}",
         ]
-        points = point_line(row, format_won)
+        points = point_line(row, format_won, " : ")
         if points:
             lines.append(points)
         lines += ["", _BACKUP_SEPARATOR, ""]
     lines += ["카테고리별 합계", ""]
     for category, amount in order_category_totals(category_totals):
-        lines.append(f"{report_category(category)}: {format_won(amount)}")
+        lines.append(f"{report_category(category)} : {format_won(amount)}")
     lines += [
         "",
-        f"전체 지출 건수: {count:,}건",
-        f"전체 합계: {format_won(total)}",
+        f"전체 지출 건수 : {count:,}건",
+        f"전체 합계 : {format_won(total)}",
         "",
         "네이버포인트 합계",
         "",
-        f"총 네이버포인트(적립): {format_won(point_earned)}",
-        f"차감한 네이버포인트(사용): {format_won(point_used)}",
+        f"총 네이버포인트(적립) : {format_won(point_earned)}",
+        f"차감한 네이버포인트(사용) : {format_won(point_used)}",
     ]
     return "\n".join(lines) + "\n"
 
