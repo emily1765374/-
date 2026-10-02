@@ -301,12 +301,8 @@ def dash_if_empty(text) -> str:
     return text if text else "-"
 
 
-def report_title(period_label) -> str:
-    if period_label in (PERIOD_THIS_WEEK, PERIOD_LAST_WEEK):
-        return "[주간 지출 내역]"
-    if period_label in (PERIOD_THIS_MONTH, PERIOD_LAST_MONTH):
-        return "[월간 지출 내역]"
-    return "[지출 내역]"
+# 이번 달·지난 달·직접 선택 보고는 모두 이 제목을 쓴다.
+MONTHLY_REPORT_TITLE = "[월간 지출 내역]"
 
 
 WEEKLY_REPORT_TITLE = "[주방비 주간 지출보고]"
@@ -390,31 +386,25 @@ def build_weekly_report_text(
     return "\n".join(lines)
 
 
-def build_report_text(period_label, start: date, end: date, rows_asc, category_totals: dict, total: int) -> str:
-    """월간·직접 선택 보고 텍스트 (PRD 13장). rows_asc는 날짜 오래된 순으로 정렬된 지출 목록.
+def build_report_text(
+    start: date, end: date, category_totals: dict, total: int,
+    point_earned: int, point_used: int, point_balance: int,
+) -> str:
+    """이번 달·지난 달·직접 선택 보고 텍스트 (PRD 13-3). 상세 내역은 넣지 않는다.
 
-    상세 내역에는 주간 보고와 마찬가지로 0원 건(포인트만 등록한 건)을 쓰지 않는다.
+    포인트 적립·사용은 기간 합계, point_balance는 기간 마지막 날까지의 전체 적립 − 사용(음수 가능)이다.
     """
-    rows_asc = spending_rows(rows_asc)
-    lines = [
-        report_title(period_label),
-        "",
-        f"기간: {to_iso(start)} ~ {to_iso(end)}",
-        "",
-    ]
+    lines = [MONTHLY_REPORT_TITLE, "", f"기간: {to_iso(start)} ~ {to_iso(end)}"]
     for category, amount in order_category_totals(category_totals):
         lines.append(f"{category}: {format_won(amount)}")
-    lines += ["", f"총 지출: {format_won(total)}", "", "상세 내역"]
-
-    date_format = "%m/%d" if start.year == end.year else "%Y/%m/%d"
-    if not rows_asc:
-        lines.append("- 해당 기간 지출 없음")
-    for row in rows_asc:
-        day = from_iso(row["expense_date"]).strftime(date_format)
-        lines.append(
-            f"- {day} | {row['category']} | {format_won(row['amount'])} | "
-            f"{dash_if_empty(row['place'])} | {dash_if_empty(row['memo'])}"
-        )
+    lines += [
+        f"▶ 총 지출: {format_won(total)}",
+        "",
+        "네이버포인트",
+        f"이번달 적립 : {format_won(point_earned)}",
+        f"이번달 사용 : {format_won(point_used)}",
+        f"▶ 사용가능포인트 : {format_won(point_balance)}",
+    ]
     return "\n".join(lines)
 
 

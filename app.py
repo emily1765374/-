@@ -483,7 +483,7 @@ def render_list_tab():
     )
     if error:
         st.error(error)
-        render_table_toggle()  # 오류일 때도 그려야 토글이 꺼지지 않는다
+        render_view_toggle()  # 오류일 때도 그려야 토글이 꺼지지 않는다
         return
 
     category = None if category_label == CATEGORY_ALL else category_label
@@ -506,7 +506,7 @@ def render_list_tab():
 
     if count == 0:
         st.info("해당 조건의 지출 내역이 없습니다.")
-    elif ss.get("list_table", False):
+    elif not ss.get("list_cards", False):
         render_expense_table(rows)
     else:
         limit = ss.get("list_limit", PAGE_SIZE)
@@ -520,12 +520,38 @@ def render_list_tab():
                 on_click=show_more,
             )
 
-    render_table_toggle()
+    render_view_toggle()
 
 
-def render_table_toggle():
-    # PC용 보조 기능이라 목록 아래에 둔다.
-    st.toggle("표로 보기 (PC)", key="list_table")
+def show_cards():
+    st.session_state["list_cards"] = True
+
+
+def table_key():
+    return f"list_table_{st.session_state.get('list_table_version', 0)}"
+
+
+def edit_selected_row():
+    """표에서 행을 고르면 카드 목록으로 바꾸고 그 건의 수정 폼을 연다."""
+    ss = st.session_state
+    selected = ss[table_key()].selection.rows
+    ids = ss.get("list_table_ids", [])
+    if not selected or selected[0] >= len(ids):
+        return
+    index = selected[0]
+    # 고른 건이 카드 목록의 표시 개수 안에 들도록 늘린다.
+    needed = (index // PAGE_SIZE + 1) * PAGE_SIZE
+    ss["list_limit"] = max(ss.get("list_limit", PAGE_SIZE), needed)
+    ss["list_cards"] = True
+    start_edit(ids[index])
+    ss["scroll_to_edit"] = ids[index]
+    # 표 key를 바꿔 선택 상태를 비운다. (다시 표로 돌아왔을 때 같은 행도 다시 고를 수 있게)
+    ss["list_table_version"] = ss.get("list_table_version", 0) + 1
+
+
+def render_view_toggle():
+    # 기본은 표, 켜면 수정·삭제할 수 있는 카드 목록. 목록 아래에 둔다.
+    st.toggle("카드로 보기 (수정·삭제)", key="list_cards")
 
 
 def render_expense_table(rows):
@@ -543,16 +569,22 @@ def render_expense_table(rows):
             for row in rows
         ]
     )
+    # 선택 콜백이 행 번호로 지출 id를 찾도록 표와 같은 순서로 저장한다. (UI 상태만, 합계 아님)
+    st.session_state["list_table_ids"] = [row["id"] for row in rows]
     st.dataframe(
         df,
         hide_index=True,
+        key=table_key(),
+        on_select=edit_selected_row,
+        selection_mode="single-row",
         column_config={
             "금액": st.column_config.NumberColumn("금액(원)", format="localized"),
             "N포인트 적립": st.column_config.NumberColumn("N포인트 적립", format="localized"),
             "N포인트 사용": st.column_config.NumberColumn("N포인트 사용", format="localized"),
         },
     )
-    st.caption("수정·삭제는 '표로 보기'를 끄고 카드 목록에서 할 수 있습니다. 좁은 화면에서는 표를 옆으로 밀어서 보세요.")
+    st.button("✏️ 수정·삭제", key="list_to_cards", width="stretch", on_click=show_cards)
+    st.caption("표 왼쪽 칸을 눌러 행을 고르면 그 건의 수정 폼이 열립니다. 삭제는 [수정·삭제]를 눌러 카드 목록에서 할 수 있습니다. 좁은 화면에서는 표를 옆으로 밀어서 보세요.")
 
 
 def expense_card_html(row) -> str:
@@ -577,6 +609,9 @@ def render_expense_card(row):
     with st.container(border=True):
         if ss.get("editing_id") == expense_id:
             render_edit_form(row)
+            if ss.get("scroll_to_edit") == expense_id:
+                ss["scroll_to_edit"] = None
+                render_scroll_to_edit(expense_id)
             return
 
         st.html(expense_card_html(row))
@@ -616,6 +651,24 @@ def render_expense_card(row):
                     on_click=request_delete,
                     args=(expense_id,),
                 )
+
+
+def render_scroll_to_edit(expense_id):
+    # 표에서 고른 건의 수정 폼이 화면 밖에 있을 수 있어 한 번 스크롤한다. (expense_id는 int)
+    # st.form에는 st-key 클래스가 붙지 않아 날짜 입력칸을 기준으로 삼는다.
+    st.html(
+        f"""<script>
+(function () {{
+  let tries = 0;
+  (function go() {{
+    const el = document.querySelector('.st-key-edit_date_{int(expense_id)}');
+    if (el) {{ el.scrollIntoView({{block: 'center', behavior: 'smooth'}}); return; }}
+    if (++tries < 20) setTimeout(go, 100);
+  }})();
+}})();
+</script>""",
+        unsafe_allow_javascript=True,
+    )
 
 
 def render_edit_form(row):
@@ -767,23 +820,24 @@ def render_point_summary():
 def build_report(period_label, start, end):
     """보고 텍스트를 매번 DB 원본에서 새로 만든다."""
     start_iso, end_iso = utils.to_iso(start), utils.to_iso(end)
-    rows = db.get_expenses(start_iso, end_iso, order="asc")
     total, _ = db.get_total(start_iso, end_iso)
+    point_earned, point_used = db.get_point_totals(start_iso, end_iso)
+    earned_to_date, used_to_date = db.get_point_totals(end=end_iso)
     if utils.is_weekly_report(period_label):
         week_ranges = utils.month_week_ranges(start)
         month_week_totals = [
             (n, db.get_total(utils.to_iso(s), utils.to_iso(e))[0]) for n, s, e in week_ranges
         ]
         month_total, _ = db.get_total(utils.to_iso(week_ranges[0][1]), end_iso)
-        point_earned, point_used = db.get_point_totals(start_iso, end_iso)
-        earned_to_date, used_to_date = db.get_point_totals(end=end_iso)
         return utils.build_weekly_report_text(
-            start, end, rows, db.get_category_totals(start_iso, end_iso), total,
+            start, end, db.get_expenses(start_iso, end_iso, order="asc"),
+            db.get_category_totals(start_iso, end_iso), total,
             month_week_totals, month_total,
             point_earned, point_used, earned_to_date - used_to_date,
         )
     return utils.build_report_text(
-        period_label, start, end, rows, db.get_category_totals(start_iso, end_iso), total
+        start, end, db.get_category_totals(start_iso, end_iso), total,
+        point_earned, point_used, earned_to_date - used_to_date,
     )
 
 
