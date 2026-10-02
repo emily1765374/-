@@ -64,11 +64,6 @@ def week_range(base: date) -> tuple[date, date]:
     return start, start + timedelta(days=6)
 
 
-def last_week_range(base: date) -> tuple[date, date]:
-    this_start, _ = week_range(base)
-    return this_start - timedelta(days=7), this_start - timedelta(days=1)
-
-
 def month_range(base: date) -> tuple[date, date]:
     """base가 속한 달의 1일 ~ 말일."""
     last_day = calendar.monthrange(base.year, base.month)[1]
@@ -80,24 +75,43 @@ def last_month_range(base: date) -> tuple[date, date]:
     return month_range(first_of_this_month - timedelta(days=1))
 
 
-def week_of_month(week_start: date) -> tuple[int, int, int]:
-    """주(일~토)가 몇 월 몇째주인지 (연, 월, 주차)를 반환한다.
+def report_week_range(base: date) -> tuple[date, date]:
+    """보고용 주: base가 속한 주(일~토)를 base가 속한 달 안으로 자른 기간.
 
-    주는 토요일이 속한 달의 주로 보고, 그 달 1일이 들어 있는 주가 1주차다. (예: 8/30~9/5 → 9월 1주차)
+    월이 바뀌는 주는 월말에서 두 토막으로 나뉜다.
+    (예: 9/27~10/3 주 → 9/27~9/30은 9월 마감, 10/1~10/3은 10월 1주차)
     """
-    saturday = week_start + timedelta(days=6)
-    return saturday.year, saturday.month, (saturday.day - 1) // 7 + 1
+    start, end = week_range(base)
+    first_of_month, last_of_month = month_range(base)
+    return max(start, first_of_month), min(end, last_of_month)
+
+
+def last_report_week_range(base: date) -> tuple[date, date]:
+    """보고용 지난 주: 이번 보고 주 바로 앞 토막. (예: 10/2 기준 → 9/27~9/30)"""
+    this_start, _ = report_week_range(base)
+    return report_week_range(this_start - timedelta(days=1))
+
+
+def week_of_month(week_start: date) -> tuple[int, int, int]:
+    """보고 주가 몇 월 몇째주인지 (연, 월, 주차)를 반환한다.
+
+    보고 주는 월말에서 잘리므로 시작일이 속한 달의 주로 보고, 그 달 1일이 들어 있는 주가 1주차다.
+    (예: 9/1~9/5 → 9월 1주차, 9/27~9/30 → 9월 5주차, 10/1~10/3 → 10월 1주차)
+    """
+    first_week_start, _ = week_range(week_start.replace(day=1))
+    this_week_start, _ = week_range(week_start)
+    return week_start.year, week_start.month, (this_week_start - first_week_start).days // 7 + 1
 
 
 def month_week_ranges(week_start: date) -> list[tuple[int, date, date]]:
     """week_start 주가 속한 달의 1주차 ~ 그 주까지 [(주차, 시작일, 종료일)]. 날짜는 그 달 안으로 자른다."""
-    year, month, week_no = week_of_month(week_start)
-    first_of_month = date(year, month, 1)
+    _, _, week_no = week_of_month(week_start)
+    first_of_month, last_of_month = month_range(week_start)
     first_week_start, _ = week_range(first_of_month)
     ranges = []
     for n in range(1, week_no + 1):
         start = first_week_start + timedelta(days=7 * (n - 1))
-        ranges.append((n, max(start, first_of_month), start + timedelta(days=6)))
+        ranges.append((n, max(start, first_of_month), min(start + timedelta(days=6), last_of_month)))
     return ranges
 
 
@@ -233,11 +247,14 @@ REPORT_PERIODS = [PERIOD_THIS_WEEK, PERIOD_LAST_WEEK, PERIOD_THIS_MONTH, PERIOD_
 
 
 def resolve_period(label, today: date, custom_start=None, custom_end=None):
-    """기간 선택 값을 (시작일, 종료일)로 바꾼다. '전체'는 (None, None)."""
+    """기간 선택 값을 (시작일, 종료일)로 바꾼다. '전체'는 (None, None).
+
+    이번 주·지난 주는 월말에서 자른 주다. (report_week_range)
+    """
     if label == PERIOD_THIS_WEEK:
-        return week_range(today)
+        return report_week_range(today)
     if label == PERIOD_LAST_WEEK:
-        return last_week_range(today)
+        return last_report_week_range(today)
     if label == PERIOD_THIS_MONTH:
         return month_range(today)
     if label == PERIOD_LAST_MONTH:

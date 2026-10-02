@@ -325,6 +325,8 @@ def activate_report(signature):
 def render_period_picker(prefix, options, default):
     """기간 선택 + (직접 선택 시) 시작일·종료일. 반환: (라벨, 시작일, 종료일, 오류 메시지).
 
+    이번 주·지난 주는 월말에서 자른 주다. (utils.report_week_range)
+
     선택지가 많아 375px에서 한 줄에 들어가지 않으므로 줄바꿈되는 pills를 사용한다.
     """
     label = st.pills("기간", options, default=default, required=True, key=f"{prefix}_period")
@@ -356,7 +358,8 @@ def summary_card_html(label, amount, sub):
 def render_summary():
     """상단 합계 요약: 이번 주 / 이번 달 (매번 DB 원본에서 계산)."""
     today = utils.today_kst()
-    week_start, week_end = utils.week_range(today)
+    # 월말에서 자른 주. (예: 10/2 → 10/01~10/03)
+    week_start, week_end = utils.report_week_range(today)
     month_start, month_end = utils.month_range(today)
 
     week_total, _ = db.get_total(utils.to_iso(week_start), utils.to_iso(week_end))
