@@ -3,3 +3,4 @@ __pycache__/
 *.csv.tmp
 .streamlit/secrets.toml
 gen-lang-client-*.json
+*.csv
