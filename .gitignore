@@ -1,0 +1,5 @@
+__pycache__/
+*.csv.bak
+*.csv.tmp
+.streamlit/secrets.toml
+gen-lang-client-*.json
