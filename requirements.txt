@@ -2,3 +2,6 @@ streamlit>=1.64
 pandas>=2.0
 st-gsheets-connection>=0.1.0
 gspread-dataframe>=3.3.0
+streamlit
+streamlit-gsheets
+pandas
